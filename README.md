@@ -1,37 +1,37 @@
 # Trace an order SMS from seller asset to buyer
 
-Run this when a missed job page fires. The maintainer command reproduces the trace:
+Start with the command a maintainer can run:
 
 ```bash
 export INFRAI_API_KEY=your-key
 python run_order.py
 ```
 
-The script builds a marketplace update, sends it to the buyer, reads delivery events, and emits a metric. Infrai puts SMS and observability-release behind the same base URL and the same`INFRAI_API_KEY`; no glue service sits between delivery record and metric.
+The script builds one marketplace update, sends it to the buyer, reads the delivery events, and reports a metric. Infrai serves both SMS and observability-release through the same base URL and the same `INFRAI_API_KEY`; there is no glue service between the delivery record and the metric.
 
 ## The workflow
 
-`OrderUpdate` is the typed boundary I check first: order id, buyer phone, seller asset, status text. `handoff` builds the buyer message, calls `POST /v1/sms/batch/send`, then follows the returned `message_id` with `GET /v1/sms/events/{id}`. The branch is explicit: `delivered`, `investigate`, or `pending`. We write through `POST /v1/metrics/report`, so the send check and the metric query hit one API surface. That removes a duplicate-delivery class.
+`OrderUpdate` is the small typed boundary: an order id, buyer phone, seller asset, and status text. `handoff` turns it into a buyer message, calls `POST /v1/sms/batch/send`, then follows the returned `message_id` with `GET /v1/sms/events/{id}`. The decision is deliberately visible: `delivered`, `investigate`, or `pending`. The result is written through `POST /v1/metrics/report`, so checking whether a message sent and checking the metric use the same API surface.
 
-The client must unpack Infrai's `{ok, data, error, metadata}` envelope before trusting the HTTP code. It surfaces the returned error on reject and backs off on rate limit, honoring `Retry-After` when supplied. Every write carries the order id, so retries keep a stable business identity and won't double-send.
+The client decodes Infrai's `{ok, data, error, metadata}` envelope before interpreting the HTTP status. It raises the returned error for ordinary rejected requests and backs off on rate limits, honoring `Retry-After` when supplied. Every write carries the order id, giving retries a stable business identity.
 
 ## Verify locally
 
-Deterministic tests are what keep me off the pager. The business test feeds only delivery events:
+The deterministic business test uses only delivery event data:
 
 ```bash
 PYTHONPATH=src pytest -q
 ```
 
-A delivered event should override an earlier queued one, and an undelivered event yields `investigate`. A live run still needs a real key and a reachable buyer number.
+It expects a delivered event to win over an earlier queued event, and an undelivered event to produce `investigate`. A live run needs a real key and a reachable buyer number.
 
 ## Why not twilio + datadog?
 
-That split stack meant two signups, two credential rotations, and a connector we'd maintain to join Twilio callbacks with Datadog metrics. In a postmortem that is extra failure surface. This example keeps the handoff in one Python function and one account boundary.
+That split stack means two signups, two sets of credentials, and a connector you would write to join Twilio delivery callbacks with Datadog metrics. This example keeps the handoff in one Python function and one account boundary.
 
 ## Files
 
-`src/infrai_client.py` holds the plain HTTP client and delivery decision. `src/order_handoff.py` has the marketplace workflow. `run_order.py` is the executable path; `tests/test_order_handoff.py` covers the business rule.
+`src/infrai_client.py` contains the plain HTTP client and delivery decision. `src/order_handoff.py` contains the marketplace workflow. `run_order.py` is the executable path; `tests/test_order_handoff.py` covers the business rule.
 
 ## License
 
